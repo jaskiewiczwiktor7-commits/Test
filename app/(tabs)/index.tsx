@@ -1,98 +1,191 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import React, { useState } from "react";
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  Keyboard,
+  StyleSheet,
+  Platform,
+} from "react-native";
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+export default function BMI() {
+  const [weight, setWeight] = useState("");
+  const [height, setHeight] = useState("");
+  const [bmi, setBmi] = useState<string | null>(null);
 
-export default function HomeScreen() {
+  const getBMIStatus = (bmiValue: number) => {
+    if (bmiValue < 18.5) {
+      return { label: "Underweight", color: "#f59e0b" };
+    } else if (bmiValue < 25) {
+      return { label: "Normal", color: "#4ade80" }; 
+    } else if (bmiValue < 30) {
+      return { label: "Overweight", color: "#f59e0b" }; 
+    } else {
+      return { label: "Obesity", color: "#ef4444" }; 
+    }
+  };
+
+  const calculateBMI = () => {
+    Keyboard.dismiss();
+
+    if (!weight || !height) {
+      setBmi("Enter correct values");
+      return;
+    }
+
+    const weightNum = parseFloat(weight.replace(",", "."));
+    const heightNum = parseFloat(height.replace(",", ".")) / 100;
+
+    if (Number.isNaN(weightNum) || Number.isNaN(heightNum) || weightNum <= 0 || heightNum <= 0) {
+      setBmi("Values must be > 0");
+      return;
+    }
+
+    const result = weightNum / (heightNum * heightNum);
+    const bmiValue = result.toFixed(1);
+    setBmi(bmiValue);
+  };
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+    <View style={styles.screen}>
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+      <View style={styles.form}>
+        <Text style={styles.label}>Weight</Text>
+        <TextInput
+          value={weight}
+          onChangeText={setWeight}
+          placeholder="kg"
+          placeholderTextColor="#9AA3B2"
+          keyboardType="numeric"
+          returnKeyType="done"
+          style={styles.input}
+        />
+
+        <Text style={[styles.label, { marginTop: 12 }]}>Height</Text>
+        <TextInput
+          value={height}
+          onChangeText={setHeight}
+          placeholder="cm"
+          placeholderTextColor="#9AA3B2"
+          keyboardType="numeric"
+          returnKeyType="done"
+          style={styles.input}
+        />
+
+        <TouchableOpacity onPress={calculateBMI} style={styles.button} activeOpacity={0.85}>
+          <Text style={styles.buttonText}>Oblicz</Text>
+        </TouchableOpacity>
+
+        {bmi !== null && !isNaN(Number(bmi)) && (
+          <View style={styles.resultBox}>
+            {(() => {
+              const status = getBMIStatus(Number(bmi));
+              return (
+                <>
+                  <Text style={[styles.resultValue, { color: status.color }]}>{bmi}</Text>
+                  <Text style={{ color: status.color, fontSize: 16, marginTop: 6 }}>
+                    {status.label}
+                  </Text>
+                </>
+              );
+            })()}
+          </View>
+        )}
+
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  screen: {
+  flex: 1,
+  backgroundColor: "#fff",
+  paddingHorizontal: 20,
+  paddingTop: 70, // ✅ TERAZ JEST TAK SAMO JAK W Measurements
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  heading: {
+    color: "#000000ff",
+    fontSize: 26,
+    fontWeight: "700",
+    textAlign: "center",
+    marginBottom: 24,
+
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  form: {
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 16,
+    marginTop: 120,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.25,
+        shadowRadius: 8,
+        marginBottom: 80,
+      },
+      android: {
+        elevation: 4,
+      },
+    }),
+
+  },
+  label: {
+    color: "#AEB8C4",
+    fontSize: 13,
+    marginBottom: 6,
+    marginLeft: 4,
+  },
+  input: {
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    color: "#4b4b4bff",
+    fontSize: 16,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000000a8",
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.25,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+    }),
+
+  },
+  button: {
+    marginTop: 18,
+    backgroundColor: "#2563EB", // niebieski akcent
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: "center",
+    
+  },
+  buttonText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  resultBox: {
+    marginTop: 18,
+    backgroundColor: "#ffffffc4",
+    paddingVertical: 16,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+  resultLabel: {
+    color: "#9FB3D8",
+    fontSize: 13,
+    marginBottom: 6,
+  },
+  resultValue: {
+    color: "#9AE6B4",
+    fontSize: 28,
+    fontWeight: "700",
   },
 });

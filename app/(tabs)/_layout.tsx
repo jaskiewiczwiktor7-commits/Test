@@ -1,35 +1,65 @@
-import { Tabs } from 'expo-router';
-import React from 'react';
-
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import "react-native-gesture-handler";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { Tabs } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
   return (
-    <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        headerShown: false,
-        tabBarButton: HapticTab,
-      }}>
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <Tabs
+        screenOptions={{
+          headerShown: true,
+          headerTitleAlign: "center",
+          headerStyle: {
+            backgroundColor: "#ffffffff",
+          },
+          headerTitleStyle: {
+            fontSize: 24,
+            fontWeight: "700",
+            color: "#000000ff",
+          },
+          tabBarActiveTintColor: "#2563EB",
+          tabBarStyle: {
+            backgroundColor: "#ffffffff",
+            borderTopColor: "#1e293b",
+            justifyContent: "center",
+            alignItems: "center",
+            height: 70,
+            paddingTop: 6,
+          },
         }}
-      />
-      <Tabs.Screen
-        name="explore"
-        options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
-        }}
-      />
-    </Tabs>
+      >
+        <Tabs.Screen
+          name="index"
+          options={{
+            title: "BMI calculator",
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="body" size={size} color={color} />
+            ),
+          }}
+        />
+
+        <Tabs.Screen
+          name="measurements"
+          options={{
+            title: "Measurements",
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="stats-chart" size={size} color={color} />
+            ),
+          }}
+        />
+
+        <Tabs.Screen
+          name="meals"
+          options={{
+            title: "Meals",
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="restaurant" size={size} color={color} />
+            ),
+          }}
+        />
+      </Tabs>
+    </GestureHandlerRootView>
   );
 }
+

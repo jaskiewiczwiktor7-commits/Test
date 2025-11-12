@@ -6,12 +6,16 @@
       "@/*": [
         "./*"
       ]
-    }
+    },
+    "types": ["victory-native"],
+    "skipLibCheck": true
   },
   "include": [
     "**/*.ts",
     "**/*.tsx",
     ".expo/types/**/*.ts",
-    "expo-env.d.ts"
+    "expo-env.d.ts",
+    "types", "**/*"
   ]
+  
 }
