@@ -316,7 +316,7 @@ const styles = StyleSheet.create({
   },
   screen: {
     flex: 1,
-    backgroundColor: "#fff", // <- TUTAJ tło całego ekranu
+    backgroundColor: "#fff", 
   },
 
   scrollContent: {

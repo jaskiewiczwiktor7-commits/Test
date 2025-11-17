@@ -1,318 +1,491 @@
-import React, { useState } from "react";
+import { Ionicons } from "@expo/vector-icons";
 import {
-    View,
-    Text,
-    StyleSheet,
+    CameraView,
+    useCameraPermissions,
+    type BarcodeScanningResult,
+} from "expo-camera";
+import { StatusBar } from "expo-status-bar";
+import React, { useCallback, useMemo, useRef, useState } from "react";
+import {
+    ActivityIndicator,
+    Alert,
+    Keyboard,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
     ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
     TouchableOpacity,
     TouchableWithoutFeedback,
-    Dimensions,
-    NativeScrollEvent,
-    NativeSyntheticEvent,
-    KeyboardAvoidingView,
-    Keyboard,
-    Platform,
-    TextInput,
-    Modal,
-    Alert, // 🔹 dodane
+    View,
 } from "react-native";
-import * as Progress from "react-native-progress";
-import { Ionicons } from "@expo/vector-icons";
+import { SafeAreaView } from "react-native-safe-area-context";
 
-const COLORS = {
-    calories: "#3B82F6",
+type MacroKey = "calories" | "protein" | "carbs" | "fat";
+type SectionKey = "breakfast" | "secondBreakfast" | "lunch" | "snack" | "dinner";
+
+type FoodItem = {
+    id: string;
+    name: string;
+    calories: number;
+    protein: number;
+    carbs: number;
+    fat: number;
+};
+
+type FoodForm = {
+    name: string;
+    calories: string;
+    protein: string;
+    carbs: string;
+    fat: string;
+    weight: string;
+};
+
+
+const SECTION_CONFIG: { key: SectionKey; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+    { key: "breakfast", label: "Breakfast", icon: "sunny-outline" },
+    { key: "secondBreakfast", label: "Second Breakfast", icon: "cloud-outline" },
+    { key: "lunch", label: "Lunch", icon: "restaurant-outline" },
+    { key: "snack", label: "Snack", icon: "ice-cream-outline" },
+    { key: "dinner", label: "Dinner", icon: "moon-outline" },
+];
+
+const GOALS: Record<MacroKey, number> = {
+    calories: 2400,
+    protein: 170,
+    carbs: 260,
+    fat: 75,
+};
+
+const COLORS: Record<MacroKey, string> = {
+    calories: "#2563EB",
     protein: "#10B981",
     carbs: "#F59E0B",
     fat: "#EF4444",
 };
 
-const SCREEN_WIDTH = Dimensions.get("window").width;
+const MACRO_ICONS: Record<MacroKey, keyof typeof Ionicons.glyphMap> = {
+    calories: "flame-outline",
+    protein: "barbell-outline",
+    carbs: "pizza-outline",
+    fat: "water-outline",
+};
 
-type MacroKey = "calories" | "protein" | "carbs" | "fat";
+const initialFoods: Record<SectionKey, FoodItem[]> = {
+    breakfast: [],
+    secondBreakfast: [],
+    lunch: [],
+    snack: [],
+    dinner: [],
+};
+
+const emptyForm = (): FoodForm => ({
+    name: "",
+    calories: "",
+    protein: "",
+    carbs: "",
+    fat: "",
+    weight: "",
+});
 
 export default function MealsScreen() {
-    const [meals, setMeals] = useState([
-        {
-            id: "1",
-            section: "Breakfast",
-            name: "Oatmeal with Banana",
-            calories: 350,
-            protein: 18,
-            carbs: 50,
-            fat: 8,
-        },
-        {
-            id: "2",
-            section: "Lunch",
-            name: "Chicken & Rice",
-            calories: 600,
-            protein: 45,
-            carbs: 70,
-            fat: 15,
-        },
-    ]);
-
-    const [activeIndex, setActiveIndex] = useState(0);
+    const [foods, setFoods] = useState<Record<SectionKey, FoodItem[]>>(initialFoods);
+    const [activeSection, setActiveSection] = useState<SectionKey>("breakfast");
     const [modalVisible, setModalVisible] = useState(false);
-    const [editingMeal, setEditingMeal] = useState<any>(null);
-    const [form, setForm] = useState({
-        name: "",
-        section: "",
-        calories: "",
-        protein: "",
-        carbs: "",
-        fat: "",
+    const [editingItem, setEditingItem] = useState<{ section: SectionKey; item: FoodItem } | null>(null);
+    const [form, setForm] = useState<FoodForm>(emptyForm());
+    const [scannerVisible, setScannerVisible] = useState(false);
+    const [isProcessingScan, setIsProcessingScan] = useState(false);
+    const [permission, requestPermission] = useCameraPermissions();
+    const scanningRef = useRef(false);
+    const [scannedMode, setScannedMode] = useState(false); // czy produkt ze skanera?
+    const [per100, setPer100] = useState({
+        calories: 0,
+        protein: 0,
+        carbs: 0,
+        fat: 0,
     });
 
-    const goals = { calories: 2500, protein: 180, carbs: 250, fat: 70 };
+    // LIVE VALUES - poprawnie w głównym ciele komponentu
+    const liveValues = useMemo(() => {
+        if (!scannedMode) return null;
+        const weight = Number(form.weight) || 100;
+        const multiplier = weight / 100;
+        return {
+            calories: Math.round(per100.calories * multiplier),
+            protein: Math.round(per100.protein * multiplier),
+            carbs: Math.round(per100.carbs * multiplier),
+            fat: Math.round(per100.fat * multiplier),
+        };
+    }, [scannedMode, form.weight, per100]);
 
-    const totals = meals.reduce(
-        (acc, meal) => {
-            acc.calories += meal.calories;
-            acc.protein += meal.protein;
-            acc.carbs += meal.carbs;
-            acc.fat += meal.fat;
-            return acc;
-        },
-        { calories: 0, protein: 0, carbs: 0, fat: 0 }
+    const flattenedFoods = useMemo(() => Object.values(foods).flat(), [foods]);
+
+    const totals = useMemo(
+        () =>
+            flattenedFoods.reduce(
+                (acc, item) => ({
+                    calories: acc.calories + item.calories,
+                    protein: acc.protein + item.protein,
+                    carbs: acc.carbs + item.carbs,
+                    fat: acc.fat + item.fat,
+                }),
+                { calories: 0, protein: 0, carbs: 0, fat: 0 }
+            ),
+        [flattenedFoods]
     );
 
-    const progress: Record<MacroKey, number> = {
-        calories: Math.min(1, totals.calories / goals.calories),
-        protein: Math.min(1, totals.protein / goals.protein),
-        carbs: Math.min(1, totals.carbs / goals.carbs),
-        fat: Math.min(1, totals.fat / goals.fat),
-    };
+    const macroStats = (Object.keys(GOALS) as MacroKey[]).map((key) => ({
+        key,
+        label: key === "calories" ? "Calories" : key.charAt(0).toUpperCase() + key.slice(1),
+        value: totals[key],
+        goal: GOALS[key],
+        suffix: key === "calories" ? "kcal" : "g",
+    }));
 
-    const stats: { key: MacroKey; label: string; value: number; goal: number }[] = [
-        { key: "calories", label: "Calories", value: totals.calories, goal: goals.calories },
-        { key: "protein", label: "Protein", value: totals.protein, goal: goals.protein },
-        { key: "carbs", label: "Carbs", value: totals.carbs, goal: goals.carbs },
-        { key: "fat", label: "Fat", value: totals.fat, goal: goals.fat },
-    ];
+    const summaryCards = macroStats.map((stat) => {
+        const remaining = Math.max(stat.goal - stat.value, 0);
+        return {
+            ...stat,
+            color: COLORS[stat.key],
+            icon: MACRO_ICONS[stat.key],
+            remaining,
+            ratio: stat.goal === 0 ? 0 : Math.min(stat.value / stat.goal, 1),
+        };
+    });
 
-    const mealSections = ["Breakfast", "Second Breakfast", "Lunch", "Dinner"];
+    const sectionTotals = useMemo(
+        () =>
+            SECTION_CONFIG.reduce<Record<SectionKey, { calories: number; protein: number; carbs: number; fat: number }>>(
+                (acc, section) => {
+                    acc[section.key] = foods[section.key].reduce(
+                        (sub, item) => ({
+                            calories: sub.calories + item.calories,
+                            protein: sub.protein + item.protein,
+                            carbs: sub.carbs + item.carbs,
+                            fat: sub.fat + item.fat,
+                        }),
+                        { calories: 0, protein: 0, carbs: 0, fat: 0 }
+                    );
+                    return acc;
+                },
+                {} as Record<SectionKey, { calories: number; protein: number; carbs: number; fat: number }>
+            ),
+        [foods]
+    );
 
-    const handleScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-        const index = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
-        setActiveIndex(index);
-    };
+    const openModal = useCallback(
+        (sectionKey: SectionKey, item?: FoodItem) => {
+            setActiveSection(sectionKey);
+            setScannedMode(false); // ← WAŻNE!
+            if (item) {
+                setEditingItem({ section: sectionKey, item });
+                setForm({
+                    name: item.name,
+                    calories: String(item.calories),
+                    protein: String(item.protein),
+                    carbs: String(item.carbs),
+                    fat: String(item.fat),
+                    weight: "100",
+                });
+            } else {
+                setEditingItem(null);
+                setForm(emptyForm());
+            }
+            setModalVisible(true);
+        },
+        []
+    );
 
-    const openModal = (section: string, mealToEdit?: any) => {
-        if (mealToEdit) {
-            setEditingMeal(mealToEdit);
-            setForm({
-                name: mealToEdit.name,
-                section: mealToEdit.section,
-                calories: String(mealToEdit.calories),
-                protein: String(mealToEdit.protein),
-                carbs: String(mealToEdit.carbs),
-                fat: String(mealToEdit.fat),
+    const closeModal = useCallback(() => {
+        setModalVisible(false);
+        setEditingItem(null);
+        setForm(emptyForm());
+        setScannedMode(false);
+    }, []);
+
+    const handleSaveFood = useCallback(() => {
+        if (!form.name.trim()) {
+            Alert.alert("Missing name", "Please provide a product name.");
+            return;
+        }
+
+        const weight = Number(form.weight) || 100;
+        const multiplier = weight / 100;
+
+        const payload: FoodItem = {
+            id: editingItem ? editingItem.item.id : `${Date.now()}`,
+            name: form.name.trim(),
+            calories: scannedMode ? liveValues?.calories ?? 0 : Math.round((Number(form.calories) || 0) * multiplier),
+            protein: scannedMode ? liveValues?.protein ?? 0 : Math.round((Number(form.protein) || 0) * multiplier),
+            carbs: scannedMode ? liveValues?.carbs ?? 0 : Math.round((Number(form.carbs) || 0) * multiplier),
+            fat: scannedMode ? liveValues?.fat ?? 0 : Math.round((Number(form.fat) || 0) * multiplier),
+        };
+
+        setFoods((prev) => {
+            const next = { ...prev };
+            if (editingItem) {
+                next[editingItem.section] = next[editingItem.section].map((item) =>
+                    item.id === editingItem.item.id ? payload : item
+                );
+            } else {
+                next[activeSection] = [...next[activeSection], payload];
+            }
+            return next;
+        });
+
+        closeModal();
+    }, [activeSection, closeModal, editingItem, form, scannedMode, liveValues]);
+
+    const handleDeleteFood = useCallback(() => {
+        if (!editingItem) return;
+        Alert.alert("Delete entry", "This cannot be undone.", [
+            { text: "Cancel", style: "cancel" },
+            {
+                text: "Delete",
+                style: "destructive",
+                onPress: () => {
+                    setFoods((prev) => ({
+                        ...prev,
+                        [editingItem.section]: prev[editingItem.section].filter(
+                            (item) => item.id !== editingItem.item.id
+                        ),
+                    }));
+                    closeModal();
+                },
+            },
+        ]);
+    }, [closeModal, editingItem]);
+
+    const ensureCameraPermission = useCallback(async () => {
+        if (Platform.OS === "web") {
+            Alert.alert("Not supported", "Barcode scanning works only on a device.");
+            return false;
+        }
+
+        let response = permission;
+        if (!response || !response.granted) {
+            response = await requestPermission();
+        }
+
+        if (!response?.granted) {
+            Alert.alert("Camera permission", "Camera permission is required to scan barcodes.");
+            return false;
+        }
+
+        return true;
+    }, [permission, requestPermission]);
+
+    const sectionLabel = useCallback(
+        (sectionKey: SectionKey) =>
+            SECTION_CONFIG.find((section) => section.key === sectionKey)?.label ?? "meal",
+        []
+    );
+
+    const applyScannedProduct = useCallback(
+        (product: { name: string; calories: number; protein: number; carbs: number; fat: number }) => {
+            setScannedMode(true);
+            setPer100({
+                calories: Math.round(product.calories || 0),
+                protein: Math.round(product.protein || 0),
+                carbs: Math.round(product.carbs || 0),
+                fat: Math.round(product.fat || 0),
             });
-        } else {
-            setEditingMeal(null);
+
             setForm({
-                name: "",
-                section,
+                name: product.name || "Scanned product",
                 calories: "",
                 protein: "",
                 carbs: "",
                 fat: "",
+                weight: "100",
             });
+
+            setScannerVisible(false);
+            setModalVisible(true);
+            setEditingItem(null);
+        },
+        []
+    );
+
+    const fetchProductFromBarcode = useCallback(async (barcode: string) => {
+        try {
+            const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`);
+            const json = await res.json();
+
+            if (!json?.product) {
+                Alert.alert("Not found", "Product not present in Open Food Facts.");
+                return;
+            }
+
+            const nutriments = json.product.nutriments ?? {};
+            applyScannedProduct({
+                name: json.product.product_name || "Unknown product",
+                calories: nutriments["energy-kcal_100g"] ? Number(nutriments["energy-kcal_100g"]) : 0,
+                protein: nutriments.proteins_100g ? Number(nutriments.proteins_100g) : 0,
+                carbs: nutriments.carbohydrates_100g ? Number(nutriments.carbohydrates_100g) : 0,
+                fat: nutriments.fat_100g ? Number(nutriments.fat_100g) : 0,
+            });
+        } catch (error) {
+            console.error(error);
+            Alert.alert("Error", "Failed to fetch product info.");
+        } finally {
+            setIsProcessingScan(false);
+            scanningRef.current = false;
         }
-        setModalVisible(true);
-    };
+    }, [applyScannedProduct]);
 
-    const handleSaveMeal = () => {
-        const newMeal = {
-            id: editingMeal ? editingMeal.id : Date.now().toString(),
-            name: form.name || "Unnamed meal",
-            section: form.section || "Breakfast",
-            calories: Number(form.calories) || 0,
-            protein: Number(form.protein) || 0,
-            carbs: Number(form.carbs) || 0,
-            fat: Number(form.fat) || 0,
-        };
+    const handleBarcodeScanned = useCallback(
+        (event: BarcodeScanningResult) => {
+            if (scanningRef.current) return;
+            scanningRef.current = true;
+            setIsProcessingScan(true);
+            fetchProductFromBarcode(event.data);
+        },
+        [fetchProductFromBarcode]
+    );
 
-        if (editingMeal) {
-            setMeals((prev) => prev.map((m) => (m.id === editingMeal.id ? newMeal : m)));
+    const openScanner = useCallback(async () => {
+        const allowed = await ensureCameraPermission();
+        if (!allowed) return;
+        setIsProcessingScan(false);
+        scanningRef.current = false;
+        setScannerVisible(true);
+    }, [ensureCameraPermission]);
+
+    const renderSummaryCard = (card: (typeof summaryCards)[number]) => (
+        <View key={card.key} style={[styles.summaryCard, { backgroundColor: card.color }]}>
+          {/* Ikona w rogu */}
+          <View style={styles.summaryIconCorner}>
+            <Ionicons name={card.icon} size={20} color="rgba(255,255,255,0.9)" />
+          </View>
+      
+          <View style={{ flex: 1, paddingTop: 4 }}>
+            <Text style={styles.summaryLabel}>{card.label}</Text>
+            <Text style={styles.summaryValue}>
+              {card.value} / {card.goal} {card.suffix}
+            </Text>
+            <Text style={styles.summarySub}>
+              {card.remaining > 0 ? `${card.remaining} ${card.suffix} remaining` : "Goal reached"}
+            </Text>
+            <View style={styles.summaryProgressTrack}>
+              <View
+                style={[
+                  styles.summaryProgressFill,
+                  { width: `${card.ratio * 100}%`, backgroundColor: "rgba(255,255,255,0.9)" },
+                ]}
+              />
+            </View>
+          </View>
+        </View>
+      );
+
+    const renderFoodItem = (sectionKey: SectionKey) => (item: FoodItem) => (
+        <TouchableOpacity
+            key={item.id}
+            style={styles.itemCard}
+            onPress={() => openModal(sectionKey, item)}
+        >
+            <View style={{ flex: 1 }}>
+                <Text style={styles.itemName}>{item.name}</Text>
+                <Text style={styles.itemDetails}>
+                    {item.calories} kcal · P {item.protein}g · C {item.carbs}g · F {item.fat}g
+                </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+        </TouchableOpacity>
+    );
+
+    const updateFormProportionally = (field: keyof FoodForm, value: string) => {
+        if (field === "weight") {
+            if (scannedMode) {
+                // tylko dla zeskanowanego produktu przelicz proporcje
+                const oldWeight = Number(form.weight) || 100;
+                const newWeight = Number(value) || 0;
+                const ratio = newWeight / oldWeight;
+    
+                setForm((prev) => ({
+                    ...prev,
+                    weight: value,
+                    calories: String(Math.round((Number(prev.calories) || 0) * ratio)),
+                    protein: String(Math.round((Number(prev.protein) || 0) * ratio)),
+                    carbs: String(Math.round((Number(prev.carbs) || 0) * ratio)),
+                    fat: String(Math.round((Number(prev.fat) || 0) * ratio)),
+                }));
+            } else {
+                // ręczne wpisanie → zmieniamy tylko wagę
+                setForm((prev) => ({ ...prev, weight: value }));
+            }
         } else {
-            setMeals((prev) => [...prev, newMeal]);
+            // zmiana kalorii/protein/carbs/fat → tylko ta wartość
+            setForm((prev) => ({
+                ...prev,
+                [field]: value,
+            }));
         }
-
-        setModalVisible(false);
-        setEditingMeal(null);
-        resetForm();
     };
-
-    const resetForm = () => {
-        setForm({
-            name: "",
-            section: "",
-            calories: "",
-            protein: "",
-            carbs: "",
-            fat: "",
-        });
-    };
-
-    // 🔹 Funkcja usuwania z potwierdzeniem
-    const confirmDeleteMeal = (id: string) => {
-        Alert.alert(
-            "Delete Meal",
-            "Are you sure you want to delete this meal?",
-            [
-                { text: "Cancel", style: "cancel" },
-                {
-                    text: "Delete",
-                    style: "destructive",
-                    onPress: () => {
-                        setMeals((prev) => prev.filter((m) => m.id !== id));
-                        setModalVisible(false);
-                        setEditingMeal(null);
-                        resetForm();
-                    },
-                },
-            ],
-            { cancelable: true }
-        );
-    };
-
+    
+    
     return (
         <>
-            <ScrollView
-                style={styles.container}
-                contentContainerStyle={{ paddingBottom: 60 }}
-                showsVerticalScrollIndicator={false}
-            >
-                {/* 🔹 Wykresy */}
-                <View style={{ alignItems: "center", height: 350 }}>
-                    <ScrollView
-                        horizontal
-                        pagingEnabled
-                        decelerationRate="fast"
-                        snapToInterval={SCREEN_WIDTH}
-                        showsHorizontalScrollIndicator={false}
-                        onScroll={handleScroll}
-                        scrollEventThrottle={16}
-                        contentContainerStyle={{
-                            alignItems: "center",
-                        }}
-                        style={styles.chartScroll}
-                    >
-                        {stats.map((m) => (
-                            <View
-                                key={m.key}
-                                style={[
-                                    styles.chartCard,
-                                    {
-                                        width: SCREEN_WIDTH - 40,
-                                        marginHorizontal: 20,
-                                        shadowColor: "#000",
-                                        shadowOffset: { width: 0, height: 3 },
-                                        shadowOpacity: 0.15,
-                                        shadowRadius: 6,
-                                        elevation: 5,
-                                    },
-                                ]}
-                            >
-                                <Progress.Circle
-                                    progress={progress[m.key]}
-                                    size={180}
-                                    color={COLORS[m.key]}
-                                    unfilledColor="#E5E7EB"
-                                    borderWidth={0}
-                                    thickness={12}
-                                    showsText
-                                    formatText={() =>
-                                        m.key === "calories"
-                                            ? `${m.value} kcal`
-                                            : `${m.value} g`
-                                    }
-                                    textStyle={{
-                                        color: "#000",
-                                        fontWeight: "700",
-                                        fontSize: 20,
-                                    }}
-                                />
-                                <Text style={styles.chartLabel}>{m.label}</Text>
-                                <Text style={styles.chartSub}>
-                                    Goal: {m.goal} {m.key === "calories" ? "kcal" : "g"}
-                                </Text>
-                            </View>
-                        ))}
-                    </ScrollView>
-
-                    {/* 🔘 Kropki pod wykresami */}
-                    <View style={{ flexDirection: "row", marginTop: 8 }}>
-                        {stats.map((_, i) => (
-                            <Ionicons
-                                key={i}
-                                name="ellipse"
-                                size={8}
-                                color={i === activeIndex ? "#2563EB" : "#D1D5DB"}
-                                style={{ marginHorizontal: 4 }}
-                            />
-                        ))}
+            <SafeAreaView style={styles.safeArea} edges={["left", "right"]}>
+                <StatusBar style="dark" />
+                <ScrollView
+                    style={styles.container}
+                    contentContainerStyle={{ paddingBottom: 80 }}
+                    showsVerticalScrollIndicator={false}
+                >
+                    <View style={styles.summarySection}>
+                        <View style={styles.summaryRow}>{summaryCards.slice(0, 2).map(renderSummaryCard)}</View>
+                        <View style={styles.summaryRow}>{summaryCards.slice(2).map(renderSummaryCard)}</View>
                     </View>
-                </View>
 
-                {/* 🔹 Makrosy */}
-                <View style={styles.macrosRow}>
-                    {stats.map((m) => (
-                        <View key={m.key} style={styles.macroBox}>
-                            <View
-                                style={[styles.colorDot, { backgroundColor: COLORS[m.key] }]}
-                            />
-                            <Text style={styles.macroText}>
-                                {m.value}
-                                <Text style={{ color: "#9CA3AF" }}>/{m.goal}</Text>
-                            </Text>
-                        </View>
-                    ))}
-                </View>
+                    <View style={{ marginTop: 24 }}>
+                        {SECTION_CONFIG.map((section) => {
+                            const items = foods[section.key];
+                            const totalsForSection = sectionTotals[section.key];
 
-                {/* 🔹 Sekcje posiłków */}
-                <View style={{ marginTop: 20 }}>
-                    {mealSections.map((section) => {
-                        const sectionMeals = meals.filter((m) => m.section === section);
-                        return (
-                            <View key={section} style={styles.sectionBlock}>
-                                <View style={styles.sectionHeader}>
-                                    <Text style={styles.sectionTitle}>{section}</Text>
-                                    <TouchableOpacity onPress={() => openModal(section)}>
-                                        <Text style={styles.addButton}>+ Add</Text>
+                            return (
+                                <View key={section.key} style={styles.sectionBlock}>
+                                    <View style={styles.sectionHeader}>
+                                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                                            <Ionicons name={section.icon} size={20} color="#2563EB" />
+                                            <Text style={styles.sectionTitle}>{section.label}</Text>
+                                        </View>
+                                        <View style={{ alignItems: "flex-end" }}>
+                                            <Text style={styles.sectionCalories}>{totalsForSection.calories} kcal</Text>
+                                            <Text style={styles.sectionMacros}>
+                                                P {totalsForSection.protein}g · C {totalsForSection.carbs}g · F{" "}
+                                                {totalsForSection.fat}g
+                                            </Text>
+                                        </View>
+                                    </View>
+
+                                    {items.length === 0 ? (
+                                        <Text style={styles.emptyText}>No foods added yet.</Text>
+                                    ) : (
+                                        items.map((item) => renderFoodItem(section.key)(item))
+                                    )}
+
+                                    <TouchableOpacity
+                                        style={styles.addFoodButton}
+                                        onPress={() => openModal(section.key)}
+                                    >
+                                        <Ionicons name="add-circle-outline" size={20} color="#2563EB"/>
+                                        <Text style={styles.addFoodText}>Add food</Text>
                                     </TouchableOpacity>
                                 </View>
+                            );
+                        })}
+                    </View>
+                </ScrollView>
+            </SafeAreaView>
 
-                                {sectionMeals.length > 0 ? (
-                                    sectionMeals.map((item) => (
-                                        // 🔹 kliknięcie w cały card otwiera formularz
-                                        <TouchableOpacity
-                                            key={item.id}
-                                            style={styles.mealCard}
-                                            onPress={() => openModal(section, item)}
-                                        >
-                                            <View style={{ flex: 1 }}>
-                                                <Text style={styles.mealName}>{item.name}</Text>
-                                                <Text style={styles.mealDetails}>
-                                                    {item.calories} kcal | P: {item.protein}g | C:{" "}
-                                                    {item.carbs}g | F: {item.fat}g
-                                                </Text>
-                                            </View>
-                                        </TouchableOpacity>
-                                    ))
-                                ) : (
-                                    <Text style={styles.emptyText}>No meals added</Text>
-                                )}
-                            </View>
-                        );
-                    })}
-                </View>
-            </ScrollView>
-
-            {/* 🔹 Modal dodawania/edycji */}
-            <Modal visible={modalVisible} animationType="slide" transparent>
+            <Modal visible={modalVisible && !scannerVisible} animationType="slide" transparent>
+                
                 <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
                     <View style={styles.modalOverlay}>
                         <KeyboardAvoidingView
@@ -322,78 +495,109 @@ export default function MealsScreen() {
                             <View style={styles.modalBox}>
                                 <View style={styles.modalHeader}>
                                     <Text style={styles.modalTitle}>
-                                        {editingMeal ? "Edit Meal" : "Add Meal"}
+                                        {editingItem
+                                            ? "Edit entry"
+                                            : `Add to ${SECTION_CONFIG.find((s) => s.key === activeSection)?.label}`}
                                     </Text>
-
-                                    {/* 🔹 Ikonka kosza (tylko podczas edycji) */}
-                                    {editingMeal && (
-                                        <TouchableOpacity
-                                            onPress={() => confirmDeleteMeal(editingMeal.id)}
-                                        >
-                                            <Ionicons
-                                                name="trash-outline"
-                                                size={24}
-                                                color="#EF4444"
-                                            />
+                                    {editingItem && (
+                                        <TouchableOpacity onPress={handleDeleteFood}>
+                                            <Ionicons name="trash-outline" size={24} color="#EF4444" />
                                         </TouchableOpacity>
                                     )}
                                 </View>
 
-                                {/* Formularz */}
+                                {/* Food Name */}
+                                <Text style={styles.inputLabel}>Food Name</Text>
                                 <TextInput
                                     style={styles.input}
-                                    placeholder="Meal name"
-                                    placeholderTextColor="#9CA3AF"
+                                    placeholder="Enter food name"
+                                    placeholderTextColor="#6B7280"
                                     value={form.name}
-                                    onChangeText={(t) => setForm({ ...form, name: t })}
+                                    onChangeText={(text) => setForm((prev) => ({ ...prev, name: text }))}
                                 />
+
+                                {/* Calories */}
+                                <Text style={styles.inputLabel}>Calories (kcal)</Text>
                                 <TextInput
                                     style={styles.input}
-                                    placeholder="Calories (kcal)"
-                                    placeholderTextColor="#9CA3AF"
+                                    placeholder="0"
+                                    placeholderTextColor="#6B7280"
                                     keyboardType="numeric"
-                                    value={form.calories}
-                                    onChangeText={(t) => setForm({ ...form, calories: t })}
+                                    value={scannedMode ? String(liveValues?.calories ?? 0) : form.calories}
+                                    onChangeText={scannedMode ? undefined : (text) => updateFormProportionally("calories", text)}
+                                    editable={!scannedMode} // ❌ tylko do edycji jeśli nie zeskanowany produkt
                                 />
+
+                                {/* Macros Row */}
+                                <View style={{ flexDirection: "row", gap: 8 }}>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.inputLabel}>Protein (g)</Text>
+                                        <TextInput
+                                            style={styles.input}
+                                            placeholder="0"
+                                            placeholderTextColor="#6B7280"
+                                            keyboardType="numeric"
+                                            value={scannedMode ? String(liveValues?.protein ?? 0) : form.protein}
+                                            onChangeText={scannedMode ? undefined : (text) => updateFormProportionally("protein", text)}
+                                            editable={!scannedMode}
+                                        />
+                                    </View>
+
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.inputLabel}>Carbs (g)</Text>
+                                        <TextInput
+                                            style={styles.input}
+                                            placeholder="0"
+                                            placeholderTextColor="#6B7280"
+                                            keyboardType="numeric"
+                                            value={scannedMode ? String(liveValues?.carbs ?? 0) : form.carbs}
+                                            onChangeText={scannedMode ? undefined : (text) => updateFormProportionally("carbs", text)}
+                                            editable={!scannedMode}
+                                        />
+                                    </View>
+
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.inputLabel}>Fat (g)</Text>
+                                        <TextInput
+                                            style={styles.input}
+                                            placeholder="0"
+                                            placeholderTextColor="#6B7280"
+                                            keyboardType="numeric"
+                                            value={scannedMode ? String(liveValues?.fat ?? 0) : form.fat}
+                                            onChangeText={scannedMode ? undefined : (text) => updateFormProportionally("fat", text)}
+                                            editable={!scannedMode}
+                                        />
+                                    </View>
+                                </View>
+
+                                {/* Weight */}
+                                <Text style={styles.inputLabel}>Weight (g)</Text>
                                 <TextInput
                                     style={styles.input}
-                                    placeholder="Protein (g)"
-                                    placeholderTextColor="#9CA3AF"
+                                    placeholder="0"
+                                    placeholderTextColor="#6B7280"
                                     keyboardType="numeric"
-                                    value={form.protein}
-                                    onChangeText={(t) => setForm({ ...form, protein: t })}
+                                    value={form.weight}
+                                    onChangeText={(text) => updateFormProportionally("weight", text)}
                                 />
-                                <TextInput
-                                    style={styles.input}
-                                    placeholder="Carbs (g)"
-                                    placeholderTextColor="#9CA3AF"
-                                    keyboardType="numeric"
-                                    value={form.carbs}
-                                    onChangeText={(t) => setForm({ ...form, carbs: t })}
-                                />
-                                <TextInput
-                                    style={styles.input}
-                                    placeholder="Fat (g)"
-                                    placeholderTextColor="#9CA3AF"
-                                    keyboardType="numeric"
-                                    value={form.fat}
-                                    onChangeText={(t) => setForm({ ...form, fat: t })}
-                                />
+                                <TouchableOpacity
+                                    style={styles.scanButton}
+                                    onPress={openScanner}
+                                >
+                                    <Ionicons name="barcode-outline" size={18} color="#fff" />
+                                    <Text style={styles.scanButtonText}>Scan barcode</Text>
+                                </TouchableOpacity>
 
                                 <View style={styles.modalButtons}>
                                     <TouchableOpacity
                                         style={[styles.modalButton, { backgroundColor: "#9CA3AF" }]}
-                                        onPress={() => {
-                                            setModalVisible(false);
-                                            setEditingMeal(null);
-                                        }}
+                                        onPress={closeModal}
                                     >
                                         <Text style={styles.modalButtonText}>Cancel</Text>
                                     </TouchableOpacity>
-
                                     <TouchableOpacity
                                         style={[styles.modalButton, { backgroundColor: "#2563EB" }]}
-                                        onPress={handleSaveMeal}
+                                        onPress={handleSaveFood}
                                     >
                                         <Text style={styles.modalButtonText}>Save</Text>
                                     </TouchableOpacity>
@@ -403,106 +607,273 @@ export default function MealsScreen() {
                     </View>
                 </TouchableWithoutFeedback>
             </Modal>
+
+            {scannerVisible && (
+                <View style={styles.scannerFullscreen}>
+                    <View style={{ flex: 1, backgroundColor: "#000" }}>
+                        {!permission ? (
+                            <View style={styles.permissionState}>
+                                <Text style={{ color: "#fff" }}>Requesting camera permission...</Text>
+                            </View>
+                        ) : !permission.granted ? (
+                            <View style={styles.permissionState}>
+                                <Text style={{ color: "#fff", marginBottom: 12 }}>Camera access denied.</Text>
+                                <TouchableOpacity onPress={requestPermission}>
+                                    <Text style={{ color: "#93C5FD" }}>Grant permission</Text>
+                                </TouchableOpacity>
+                            </View>
+                        ) : (
+                            <>
+                                <CameraView
+                                    style={styles.camera}
+                                    facing="back"
+                                    ratio="4:3"
+                                    barcodeScannerSettings={{
+                                        barcodeTypes: [
+                                            "ean13",
+                                            "ean8",
+                                            "upc_a",
+                                            "upc_e",
+                                            "code39",
+                                            "code93",
+                                            "code128",
+                                            "qr",
+                                        ],
+                                    }}
+                                    onBarcodeScanned={handleBarcodeScanned}
+                                />
+
+                                <View style={styles.overlay}>
+                                    <View style={styles.overlayRow} />
+                                    <View style={styles.overlayRow}>
+                                        <View style={styles.overlaySide} />
+                                        <View style={styles.overlayFrame} />
+                                        <View style={styles.overlaySide} />
+                                    </View>
+                                    <View style={styles.overlayRow} />
+                                </View>
+
+                                {isProcessingScan && (
+                                    <View style={styles.scannerLoadingOverlay}>
+                                        <ActivityIndicator size="large" color="#fff" />
+                                        <Text style={styles.scannerLoadingText}>Fetching product…</Text>
+                                    </View>
+                                )}
+                            </>
+                        )}
+
+                        <TouchableOpacity
+                            onPress={() => {
+                                setScannerVisible(false);
+                                setIsProcessingScan(false);
+                                scanningRef.current = false;
+                            }}
+                            style={styles.closeScannerButton}
+                        >
+                            <Text style={{ color: "#fff", fontSize: 16 }}>Close</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            )}
         </>
     );
 }
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: "#fff", paddingTop: 10 },
-    chartScroll: { marginTop: 10 },
-    chartCard: {
+    safeArea: { flex: 1, backgroundColor: "#fff" },
+    summarySection: { paddingHorizontal: 20, marginTop: 4 },
+    summaryRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
+    summaryCard: {
+        flex: 1,
+        borderRadius: 14,
+        padding: 12,
+        marginHorizontal: 4,
+        marginVertical: 6,
+        shadowColor: "#000",
+        shadowOpacity: 0.12,
+        shadowOffset: { width: 0, height: 4 },
+        shadowRadius: 6,
+        elevation: 4,
+      },
+      summaryIconCorner: {
+        position: "absolute",
+        top: 8,
+        right: 8,
+        width: 28,
+        height: 28,
+        borderRadius: 14,
+        backgroundColor: "rgba(255,255,255,0.2)",
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: "#F9FAFB",
-        borderRadius: 20,
-        padding: 16,
+      },
+    summaryLabel: { color: "rgba(255,255,255,0.9)", fontSize: 13, textTransform: "uppercase", letterSpacing: 0.5 },
+    summaryValue: { color: "#fff", fontSize: 20, fontWeight: "700", marginTop: 4 },
+    summarySub: { color: "rgba(255,255,255,0.85)", marginTop: 2, fontWeight: "500" },
+    summaryProgressTrack: {
+        height: 6,
+        borderRadius: 999,
+        backgroundColor: "rgba(255,255,255,0.25)",
+        marginTop: 8,
+        overflow: "hidden",
     },
-    chartLabel: { marginTop: 12, fontWeight: "700", color: "#111", fontSize: 20 },
-    chartSub: { color: "#555", fontSize: 16, marginTop: 2 },
-    macrosRow: {
-        flexDirection: "row",
-        justifyContent: "space-around",
-        alignItems: "center",
-        marginTop: 20,
+    summaryProgressFill: {
+        height: "100%",
+        borderRadius: 999,
+    },
+    sectionBlock: {
+        marginBottom: 26,
         paddingHorizontal: 20,
+        paddingVertical: 18,
+        backgroundColor: "#F3F4F6",
+        borderRadius: 18,
+        marginHorizontal: 12,
     },
-    macroBox: { flexDirection: "row", alignItems: "center", marginRight: 12 },
-    colorDot: { width: 14, height: 14, borderRadius: 4, marginRight: 3 },
-    macroText: { fontWeight: "500", color: "#111" },
-    sectionBlock: { marginBottom: 24, paddingHorizontal: 20 },
     sectionHeader: {
         flexDirection: "row",
         justifyContent: "space-between",
         alignItems: "center",
-        marginBottom: 8,
-    },
-    sectionTitle: { fontSize: 18, fontWeight: "600", color: "#111" },
-    addButton: { fontSize: 16, fontWeight: "700", color: "#2563EB" },
-    mealCard: {
-        flexDirection: "row",
-        alignItems: "center",
-        backgroundColor: "#F3F4F6",
-        padding: 12,
-        borderRadius: 10,
         marginBottom: 10,
     },
-    mealName: { fontSize: 16, fontWeight: "500", color: "#111" },
-    mealDetails: { color: "#444", fontSize: 14 },
-    emptyText: { color: "#999", fontStyle: "italic", textAlign: "center" },
-
+    sectionTitle: { fontSize: 18, fontWeight: "700", color: "#111" },
+    sectionCalories: { fontSize: 16, fontWeight: "700", color: "#111827" },
+    sectionMacros: { color: "#6B7280", fontSize: 13 },
+    itemCard: {
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: "#fff",
+        padding: 12,
+        borderRadius: 12,
+        marginBottom: 10,
+        shadowColor: "#000",
+        shadowOpacity: 0.05,
+        shadowOffset: { width: 0, height: 2 },
+        shadowRadius: 4,
+        elevation: 1,
+    },
+    itemName: { fontSize: 16, fontWeight: "600", color: "#0F172A" },
+    itemDetails: { color: "#4B5563", fontSize: 14, marginTop: 2 },
+    emptyText: { color: "#94A3B8", fontStyle: "italic" },
+    addFoodButton: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 6,
+        paddingVertical: 12,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: "#BFDBFE",
+        marginTop: 4,
+    },
+    addFoodText: { color: "#2563EB", fontWeight: "700" },
     modalOverlay: {
         flex: 1,
-        backgroundColor: "rgba(0,0,0,0.4)",
+        backgroundColor: "rgba(0,0,0,0.45)",
         justifyContent: "center",
         alignItems: "center",
+        paddingHorizontal: 16,
     },
-    modalContainer: { width: "100%", paddingHorizontal: 20 },
+    modalContainer: { width: "100%" },
     modalBox: {
         backgroundColor: "#fff",
-        borderRadius: 16,
+        borderRadius: 20,
         padding: 20,
         width: "100%",
         shadowColor: "#000",
-        shadowOpacity: 0.2,
-        shadowOffset: { width: 0, height: 2 },
-        shadowRadius: 6,
-        elevation: 5,
+        shadowOpacity: 0.25,
+        shadowOffset: { width: 0, height: 8 },
+        shadowRadius: 16,
+        elevation: 6,
     },
     modalHeader: {
         flexDirection: "row",
         justifyContent: "space-between",
         alignItems: "center",
-        marginBottom: 10,
+        marginBottom: 12,
     },
-    modalTitle: {
-        fontSize: 20,
-        fontWeight: "700",
-        color: "#111",
-    },
+    modalTitle: { fontSize: 20, fontWeight: "700", color: "#111" },
     input: {
         borderWidth: 1,
-        borderColor: "#E5E7EB",
-        borderRadius: 10,
-        padding: 10,
-        marginBottom: 10,
-        fontSize: 16,
-        color: "#111",
+        borderColor: "#ccccccff",
+        color: "#000",
+        borderRadius: 8,
+        padding: 12,
+        marginBottom: 16
     },
-    modalButtons: {
+    inputLabel: {
+        fontSize: 12,
+        fontWeight: "600",
+        color: "#374151",
+        marginBottom: 4,
+    },
+
+    scanButton: {
         flexDirection: "row",
-        justifyContent: "space-between",
-        marginTop: 12,
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        backgroundColor: "#059669",
+        padding: 12,
+        borderRadius: 10,
+        marginVertical: 12,
     },
+    scanButtonText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+    modalButtons: { flexDirection: "row", justifyContent: "space-between", marginTop: 4 },
     modalButton: {
         flex: 1,
         padding: 12,
         borderRadius: 10,
-        marginHorizontal: 5,
         alignItems: "center",
+        marginHorizontal: 6,
     },
-    modalButtonText: {
+    modalButtonText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+    permissionState: {
+        flex: 1,
+        alignItems: "center",
+        justifyContent: "center",
+        paddingHorizontal: 24,
+    },
+    closeScannerButton: {
+        position: "absolute",
+        bottom: 40,
+        alignSelf: "center",
+        backgroundColor: "rgba(0,0,0,0.6)",
+        paddingHorizontal: 28,
+        paddingVertical: 12,
+        borderRadius: 999,
+    },
+    scannerFullscreen: {
+        ...StyleSheet.absoluteFillObject,
+        zIndex: 99,
+    },
+    scannerLoadingOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: "rgba(0,0,0,0.45)",
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    scannerLoadingText: {
         color: "#fff",
         fontWeight: "600",
-        fontSize: 16,
+        marginTop: 8,
+    },
+    camera: {
+        flex: 1,
+        width: "100%",
+        aspectRatio: 3 / 4,
+    },
+    overlay: {
+        ...StyleSheet.absoluteFillObject,
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    overlayRow: { flexDirection: "row" },
+    overlaySide: { flex: 1 },
+    overlayFrame: {
+        width: 300,
+        height: 160,
+        borderWidth: 2,
+        borderColor: "#fff",
+        borderRadius: 14,
     },
 });
