@@ -4,6 +4,7 @@ import {
     useCameraPermissions,
     type BarcodeScanningResult,
 } from "expo-camera";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { StatusBar } from "expo-status-bar";
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
@@ -33,6 +34,7 @@ type FoodItem = {
     protein: number;
     carbs: number;
     fat: number;
+    date: string; // YYYY-MM-DD key for history
 };
 
 type FoodForm = {
@@ -43,7 +45,6 @@ type FoodForm = {
     fat: string;
     weight: string;
 };
-
 
 const SECTION_CONFIG: { key: SectionKey; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
     { key: "breakfast", label: "Breakfast", icon: "sunny-outline" },
@@ -91,6 +92,9 @@ const emptyForm = (): FoodForm => ({
     weight: "",
 });
 
+const dateKey = (d: Date) => d.toISOString().slice(0, 10);
+const formatHuman = (d: Date) => d.toLocaleDateString();
+
 export default function MealsScreen() {
     const [foods, setFoods] = useState<Record<SectionKey, FoodItem[]>>(initialFoods);
     const [activeSection, setActiveSection] = useState<SectionKey>("breakfast");
@@ -101,15 +105,16 @@ export default function MealsScreen() {
     const [isProcessingScan, setIsProcessingScan] = useState(false);
     const [permission, requestPermission] = useCameraPermissions();
     const scanningRef = useRef(false);
-    const [scannedMode, setScannedMode] = useState(false); // czy produkt ze skanera?
-    const [per100, setPer100] = useState({
-        calories: 0,
-        protein: 0,
-        carbs: 0,
-        fat: 0,
-    });
+    const [scannedMode, setScannedMode] = useState(false);
+    const [per100, setPer100] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0 });
 
-    // LIVE VALUES - poprawnie w głównym ciele komponentu
+    // Calendar / history state
+    const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+    const [showDatePicker, setShowDatePicker] = useState(false);
+
+    const selectedDateKey = useMemo(() => dateKey(selectedDate), [selectedDate]);
+
+    // LIVE VALUES - only used when scannedMode
     const liveValues = useMemo(() => {
         if (!scannedMode) return null;
         const weight = Number(form.weight) || 100;
@@ -124,9 +129,15 @@ export default function MealsScreen() {
 
     const flattenedFoods = useMemo(() => Object.values(foods).flat(), [foods]);
 
+    // Filtered to selected day for history view
+    const filteredFoods = useMemo(
+        () => flattenedFoods.filter((f) => f.date === selectedDateKey),
+        [flattenedFoods, selectedDateKey]
+    );
+
     const totals = useMemo(
         () =>
-            flattenedFoods.reduce(
+            filteredFoods.reduce(
                 (acc, item) => ({
                     calories: acc.calories + item.calories,
                     protein: acc.protein + item.protein,
@@ -135,7 +146,7 @@ export default function MealsScreen() {
                 }),
                 { calories: 0, protein: 0, carbs: 0, fat: 0 }
             ),
-        [flattenedFoods]
+        [filteredFoods]
     );
 
     const macroStats = (Object.keys(GOALS) as MacroKey[]).map((key) => ({
@@ -161,26 +172,28 @@ export default function MealsScreen() {
         () =>
             SECTION_CONFIG.reduce<Record<SectionKey, { calories: number; protein: number; carbs: number; fat: number }>>(
                 (acc, section) => {
-                    acc[section.key] = foods[section.key].reduce(
-                        (sub, item) => ({
-                            calories: sub.calories + item.calories,
-                            protein: sub.protein + item.protein,
-                            carbs: sub.carbs + item.carbs,
-                            fat: sub.fat + item.fat,
-                        }),
-                        { calories: 0, protein: 0, carbs: 0, fat: 0 }
-                    );
+                    acc[section.key] = foods[section.key]
+                        .filter((it) => it.date === selectedDateKey)
+                        .reduce(
+                            (sub, item) => ({
+                                calories: sub.calories + item.calories,
+                                protein: sub.protein + item.protein,
+                                carbs: sub.carbs + item.carbs,
+                                fat: sub.fat + item.fat,
+                            }),
+                            { calories: 0, protein: 0, carbs: 0, fat: 0 }
+                        );
                     return acc;
                 },
                 {} as Record<SectionKey, { calories: number; protein: number; carbs: number; fat: number }>
             ),
-        [foods]
+        [foods, selectedDateKey]
     );
 
     const openModal = useCallback(
         (sectionKey: SectionKey, item?: FoodItem) => {
             setActiveSection(sectionKey);
-            setScannedMode(false); // ← WAŻNE!
+            setScannedMode(false);
             if (item) {
                 setEditingItem({ section: sectionKey, item });
                 setForm({
@@ -223,6 +236,7 @@ export default function MealsScreen() {
             protein: scannedMode ? liveValues?.protein ?? 0 : Math.round((Number(form.protein) || 0) * multiplier),
             carbs: scannedMode ? liveValues?.carbs ?? 0 : Math.round((Number(form.carbs) || 0) * multiplier),
             fat: scannedMode ? liveValues?.fat ?? 0 : Math.round((Number(form.fat) || 0) * multiplier),
+            date: editingItem ? editingItem.item.date ?? selectedDateKey : selectedDateKey,
         };
 
         setFoods((prev) => {
@@ -238,7 +252,7 @@ export default function MealsScreen() {
         });
 
         closeModal();
-    }, [activeSection, closeModal, editingItem, form, scannedMode, liveValues]);
+    }, [activeSection, closeModal, editingItem, form, scannedMode, liveValues, selectedDateKey]);
 
     const handleDeleteFood = useCallback(() => {
         if (!editingItem) return;
@@ -287,20 +301,27 @@ export default function MealsScreen() {
 
     const applyScannedProduct = useCallback(
         (product: { name: string; calories: number; protein: number; carbs: number; fat: number }) => {
+            // ustawiamy scannedMode i wartości per100, oraz od razu wypełniamy pola
             setScannedMode(true);
+            const c = Math.round(product.calories || 0);
+            const p = Math.round(product.protein || 0);
+            const ca = Math.round(product.carbs || 0);
+            const f = Math.round(product.fat || 0);
+
             setPer100({
-                calories: Math.round(product.calories || 0),
-                protein: Math.round(product.protein || 0),
-                carbs: Math.round(product.carbs || 0),
-                fat: Math.round(product.fat || 0),
+                calories: c,
+                protein: p,
+                carbs: ca,
+                fat: f,
             });
 
+            // uzupełniamy form dla 100g tak, żeby od razu było widać wartości
             setForm({
                 name: product.name || "Scanned product",
-                calories: "",
-                protein: "",
-                carbs: "",
-                fat: "",
+                calories: String(c),
+                protein: String(p),
+                carbs: String(ca),
+                fat: String(f),
                 weight: "100",
             });
 
@@ -356,32 +377,36 @@ export default function MealsScreen() {
         setScannerVisible(true);
     }, [ensureCameraPermission]);
 
+
+    const prevDay = () => setSelectedDate((d) => new Date(d.getTime() - 24 * 3600 * 1000));
+    const nextDay = () => setSelectedDate((d) => new Date(d.getTime() + 24 * 3600 * 1000));
+    const setToday = () => setSelectedDate(new Date());
+
     const renderSummaryCard = (card: (typeof summaryCards)[number]) => (
         <View key={card.key} style={[styles.summaryCard, { backgroundColor: card.color }]}>
-          {/* Ikona w rogu */}
-          <View style={styles.summaryIconCorner}>
-            <Ionicons name={card.icon} size={20} color="rgba(255,255,255,0.9)" />
-          </View>
-      
-          <View style={{ flex: 1, paddingTop: 4 }}>
-            <Text style={styles.summaryLabel}>{card.label}</Text>
-            <Text style={styles.summaryValue}>
-              {card.value} / {card.goal} {card.suffix}
-            </Text>
-            <Text style={styles.summarySub}>
-              {card.remaining > 0 ? `${card.remaining} ${card.suffix} remaining` : "Goal reached"}
-            </Text>
-            <View style={styles.summaryProgressTrack}>
-              <View
-                style={[
-                  styles.summaryProgressFill,
-                  { width: `${card.ratio * 100}%`, backgroundColor: "rgba(255,255,255,0.9)" },
-                ]}
-              />
+            <View style={styles.summaryIconCorner}>
+                <Ionicons name={card.icon} size={20} color="rgba(255,255,255,0.9)" />
             </View>
-          </View>
+
+            <View style={{ flex: 1, paddingTop: 4 }}>
+                <Text style={styles.summaryLabel}>{card.label}</Text>
+                <Text style={styles.summaryValue}>
+                    {card.value} / {card.goal} {card.suffix}
+                </Text>
+                <Text style={styles.summarySub}>
+                    {card.remaining > 0 ? `${card.remaining} ${card.suffix} remaining` : "Goal reached"}
+                </Text>
+                <View style={styles.summaryProgressTrack}>
+                    <View
+                        style={[
+                            styles.summaryProgressFill,
+                            { width: `${card.ratio * 100}%`, backgroundColor: "rgba(255,255,255,0.9)" },
+                        ]}
+                    />
+                </View>
+            </View>
         </View>
-      );
+    );
 
     const renderFoodItem = (sectionKey: SectionKey) => (item: FoodItem) => (
         <TouchableOpacity
@@ -402,11 +427,13 @@ export default function MealsScreen() {
     const updateFormProportionally = (field: keyof FoodForm, value: string) => {
         if (field === "weight") {
             if (scannedMode) {
-                // tylko dla zeskanowanego produktu przelicz proporcje
+                // przy scannedMode zmieniamy tylko weight — liveValues przeliczy się automatycznie
+                setForm((prev) => ({ ...prev, weight: value }));
+            } else {
                 const oldWeight = Number(form.weight) || 100;
                 const newWeight = Number(value) || 0;
-                const ratio = newWeight / oldWeight;
-    
+                const ratio = oldWeight === 0 ? 0 : newWeight / oldWeight;
+
                 setForm((prev) => ({
                     ...prev,
                     weight: value,
@@ -415,20 +442,23 @@ export default function MealsScreen() {
                     carbs: String(Math.round((Number(prev.carbs) || 0) * ratio)),
                     fat: String(Math.round((Number(prev.fat) || 0) * ratio)),
                 }));
-            } else {
-                // ręczne wpisanie → zmieniamy tylko wagę
-                setForm((prev) => ({ ...prev, weight: value }));
             }
         } else {
-            // zmiana kalorii/protein/carbs/fat → tylko ta wartość
             setForm((prev) => ({
                 ...prev,
                 [field]: value,
             }));
         }
     };
-    
-    
+
+
+    // Calendar handlers (DateTimePicker)
+    const openDatePicker = () => setShowDatePicker(true);
+    const onDateChange = (_: any, d?: Date) => {
+        if (d) setSelectedDate(d);
+        if (Platform.OS !== "ios") setShowDatePicker(false);
+    };
+
     return (
         <>
             <SafeAreaView style={styles.safeArea} edges={["left", "right"]}>
@@ -438,6 +468,40 @@ export default function MealsScreen() {
                     contentContainerStyle={{ paddingBottom: 80 }}
                     showsVerticalScrollIndicator={false}
                 >
+                    {/* Calendar header - only one, human-friendly date shown */}
+                    <View style={{ paddingHorizontal: 20, marginTop: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                        <View style={{ flexDirection: "row", alignItems: "center" }}>
+                            <TouchableOpacity onPress={prevDay} style={{ padding: 8 }}>
+                                <Ionicons name="chevron-back" size={22} color="#111" />
+                            </TouchableOpacity>
+
+                            <TouchableOpacity onPress={openDatePicker} style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 8 }}>
+                                <Text style={{ fontSize: 16, fontWeight: "700" }}>{formatHuman(selectedDate)}</Text>
+                                <Ionicons name="calendar-outline" size={22} color="#2563EB" style={{ marginLeft: 10 }} />
+                            </TouchableOpacity>
+
+                            <TouchableOpacity onPress={nextDay} style={{ padding: 8 }}>
+                                <Ionicons name="chevron-forward" size={22} color="#111" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <View style={{ flexDirection: "row", alignItems: "center" }}>
+                            <TouchableOpacity onPress={setToday} style={{ padding: 8 }}>
+                                <Text style={{ color: "#2563EB", fontWeight: "700" }}>Today</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+
+                    {showDatePicker && (
+                        <DateTimePicker
+                            value={selectedDate}
+                            mode="date"
+                            display={Platform.OS === "ios" ? "spinner" : "default"}
+                            onChange={onDateChange}
+                            maximumDate={new Date(2100, 0, 1)}
+                        />
+                    )}
+
                     <View style={styles.summarySection}>
                         <View style={styles.summaryRow}>{summaryCards.slice(0, 2).map(renderSummaryCard)}</View>
                         <View style={styles.summaryRow}>{summaryCards.slice(2).map(renderSummaryCard)}</View>
@@ -445,15 +509,17 @@ export default function MealsScreen() {
 
                     <View style={{ marginTop: 24 }}>
                         {SECTION_CONFIG.map((section) => {
-                            const items = foods[section.key];
+                            const items = foods[section.key].filter((it) => it.date === selectedDateKey);
                             const totalsForSection = sectionTotals[section.key];
 
                             return (
                                 <View key={section.key} style={styles.sectionBlock}>
                                     <View style={styles.sectionHeader}>
-                                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                                        <View style={{ flexDirection: "row", alignItems: "center" }}>
                                             <Ionicons name={section.icon} size={20} color="#2563EB" />
-                                            <Text style={styles.sectionTitle}>{section.label}</Text>
+                                            <View style={{ marginLeft: 8 }}>
+                                                <Text style={styles.sectionTitle}>{section.label}</Text>
+                                            </View>
                                         </View>
                                         <View style={{ alignItems: "flex-end" }}>
                                             <Text style={styles.sectionCalories}>{totalsForSection.calories} kcal</Text>
@@ -465,7 +531,7 @@ export default function MealsScreen() {
                                     </View>
 
                                     {items.length === 0 ? (
-                                        <Text style={styles.emptyText}>No foods added yet.</Text>
+                                        <Text style={styles.emptyText}>No foods added for this date.</Text>
                                     ) : (
                                         items.map((item) => renderFoodItem(section.key)(item))
                                     )}
@@ -474,7 +540,7 @@ export default function MealsScreen() {
                                         style={styles.addFoodButton}
                                         onPress={() => openModal(section.key)}
                                     >
-                                        <Ionicons name="add-circle-outline" size={20} color="#2563EB"/>
+                                        <Ionicons name="add-circle-outline" size={20} color="#2563EB" />
                                         <Text style={styles.addFoodText}>Add food</Text>
                                     </TouchableOpacity>
                                 </View>
@@ -485,7 +551,6 @@ export default function MealsScreen() {
             </SafeAreaView>
 
             <Modal visible={modalVisible && !scannerVisible} animationType="slide" transparent>
-                
                 <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
                     <View style={styles.modalOverlay}>
                         <KeyboardAvoidingView
@@ -497,7 +562,7 @@ export default function MealsScreen() {
                                     <Text style={styles.modalTitle}>
                                         {editingItem
                                             ? "Edit entry"
-                                            : `Add to ${SECTION_CONFIG.find((s) => s.key === activeSection)?.label}`}
+                                            : `Add to ${SECTION_CONFIG.find((s) => s.key === activeSection)?.label} (${selectedDateKey})`}
                                     </Text>
                                     {editingItem && (
                                         <TouchableOpacity onPress={handleDeleteFood}>
@@ -518,55 +583,67 @@ export default function MealsScreen() {
 
                                 {/* Calories */}
                                 <Text style={styles.inputLabel}>Calories (kcal)</Text>
-                                <TextInput
-                                    style={styles.input}
-                                    placeholder="0"
-                                    placeholderTextColor="#6B7280"
-                                    keyboardType="numeric"
-                                    value={scannedMode ? String(liveValues?.calories ?? 0) : form.calories}
-                                    onChangeText={scannedMode ? undefined : (text) => updateFormProportionally("calories", text)}
-                                    editable={!scannedMode} // ❌ tylko do edycji jeśli nie zeskanowany produkt
-                                />
+                                <View style={styles.inputWrapper}>
+                                    <TextInput
+                                        style={[styles.input, scannedMode && styles.readonlyInput]}
+                                        placeholder="0"
+                                        placeholderTextColor="#6B7280"
+                                        keyboardType="numeric"
+                                        value={scannedMode ? String(liveValues?.calories ?? 0) : form.calories}
+                                        onChangeText={scannedMode ? undefined : (text) => updateFormProportionally("calories", text)}
+                                        editable={!scannedMode}
+                                    />
+                                    {scannedMode && <Ionicons name="lock-closed" size={18} color="#9CA3AF" style={styles.lockIcon} />}
+                                </View>
 
                                 {/* Macros Row */}
-                                <View style={{ flexDirection: "row", gap: 8 }}>
-                                    <View style={{ flex: 1 }}>
+                                <View style={{ flexDirection: "row" }}>
+                                    <View style={{ flex: 1, marginRight: 6 }}>
                                         <Text style={styles.inputLabel}>Protein (g)</Text>
-                                        <TextInput
-                                            style={styles.input}
-                                            placeholder="0"
-                                            placeholderTextColor="#6B7280"
-                                            keyboardType="numeric"
-                                            value={scannedMode ? String(liveValues?.protein ?? 0) : form.protein}
-                                            onChangeText={scannedMode ? undefined : (text) => updateFormProportionally("protein", text)}
-                                            editable={!scannedMode}
-                                        />
+                                        <View style={styles.inputWrapper}>
+                                            <TextInput
+                                                style={[styles.input, scannedMode && styles.readonlyInput]}
+                                                placeholder="0"
+                                                placeholderTextColor="#6B7280"
+                                                keyboardType="numeric"
+                                                value={scannedMode ? String(liveValues?.protein ?? 0) : form.protein}
+                                                onChangeText={scannedMode ? undefined : (text) => updateFormProportionally("protein", text)}
+                                                editable={!scannedMode}
+                                            />
+                                            {scannedMode && <Ionicons name="lock-closed" size={16} color="#9CA3AF" style={styles.lockIcon} />}
+                                        </View>
                                     </View>
 
-                                    <View style={{ flex: 1 }}>
+                                    <View style={{ flex: 1, marginHorizontal: 3 }}>
                                         <Text style={styles.inputLabel}>Carbs (g)</Text>
-                                        <TextInput
-                                            style={styles.input}
-                                            placeholder="0"
-                                            placeholderTextColor="#6B7280"
-                                            keyboardType="numeric"
-                                            value={scannedMode ? String(liveValues?.carbs ?? 0) : form.carbs}
-                                            onChangeText={scannedMode ? undefined : (text) => updateFormProportionally("carbs", text)}
-                                            editable={!scannedMode}
-                                        />
+                                        <View style={styles.inputWrapper}>
+                                            <TextInput
+                                                style={[styles.input, scannedMode && styles.readonlyInput]}
+                                                placeholder="0"
+                                                placeholderTextColor="#6B7280"
+                                                keyboardType="numeric"
+                                                value={scannedMode ? String(liveValues?.carbs ?? 0) : form.carbs}
+                                                onChangeText={scannedMode ? undefined : (text) => updateFormProportionally("carbs", text)}
+                                                editable={!scannedMode}
+                                            />
+                                            {scannedMode && <Ionicons name="lock-closed" size={16} color="#9CA3AF" style={styles.lockIcon} />}
+                                        </View>
                                     </View>
 
-                                    <View style={{ flex: 1 }}>
+                                    <View style={{ flex: 1, marginLeft: 6 }}>
                                         <Text style={styles.inputLabel}>Fat (g)</Text>
-                                        <TextInput
-                                            style={styles.input}
-                                            placeholder="0"
-                                            placeholderTextColor="#6B7280"
-                                            keyboardType="numeric"
-                                            value={scannedMode ? String(liveValues?.fat ?? 0) : form.fat}
-                                            onChangeText={scannedMode ? undefined : (text) => updateFormProportionally("fat", text)}
-                                            editable={!scannedMode}
-                                        />
+                                        <View style={styles.inputWrapper}>
+                                            <TextInput
+                                                style={[styles.input, scannedMode && styles.readonlyInput]}
+                                                placeholder="0"
+                                                placeholderTextColor="#6B7280"
+                                                keyboardType="numeric"
+                                                value={scannedMode ? String(liveValues?.fat ?? 0) : form.fat}
+                                                onChangeText={scannedMode ? undefined : (text) => updateFormProportionally("fat", text)}
+                                                editable={!scannedMode}
+                                            />
+                                            {scannedMode && <Ionicons name="lock-closed" size={16} color="#9CA3AF" style={styles.lockIcon} />}
+                                        </View>
                                     </View>
                                 </View>
 
@@ -695,8 +772,8 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: 4 },
         shadowRadius: 6,
         elevation: 4,
-      },
-      summaryIconCorner: {
+    },
+    summaryIconCorner: {
         position: "absolute",
         top: 8,
         right: 8,
@@ -706,7 +783,7 @@ const styles = StyleSheet.create({
         backgroundColor: "rgba(255,255,255,0.2)",
         alignItems: "center",
         justifyContent: "center",
-      },
+    },
     summaryLabel: { color: "rgba(255,255,255,0.9)", fontSize: 13, textTransform: "uppercase", letterSpacing: 0.5 },
     summaryValue: { color: "#fff", fontSize: 20, fontWeight: "700", marginTop: 4 },
     summarySub: { color: "rgba(255,255,255,0.85)", marginTop: 2, fontWeight: "500" },
@@ -758,14 +835,13 @@ const styles = StyleSheet.create({
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
-        gap: 6,
         paddingVertical: 12,
         borderRadius: 12,
         borderWidth: 1,
         borderColor: "#BFDBFE",
         marginTop: 4,
     },
-    addFoodText: { color: "#2563EB", fontWeight: "700" },
+    addFoodText: { color: "#2563EB", fontWeight: "700", marginLeft: 8 },
     modalOverlay: {
         flex: 1,
         backgroundColor: "rgba(0,0,0,0.45)",
@@ -806,12 +882,24 @@ const styles = StyleSheet.create({
         color: "#374151",
         marginBottom: 4,
     },
-
+    inputWrapper: {
+        position: "relative",
+    },
+    readonlyInput: {
+        backgroundColor: "#F3F4F6",
+        color: "#6B7280",
+        borderColor: "#E5E7EB",
+    },
+    lockIcon: {
+        position: "absolute",
+        right: 12,
+        top: 14,
+        opacity: 0.9,
+    },
     scanButton: {
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
-        gap: 8,
         backgroundColor: "#059669",
         padding: 12,
         borderRadius: 10,

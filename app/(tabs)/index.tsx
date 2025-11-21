@@ -103,7 +103,7 @@ const styles = StyleSheet.create({
   flex: 1,
   backgroundColor: "#fff",
   paddingHorizontal: 20,
-  paddingTop: 70, // ✅ TERAZ JEST TAK SAMO JAK W Measurements
+  paddingTop: 70, 
   },
   heading: {
     color: "#000000ff",

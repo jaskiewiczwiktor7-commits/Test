@@ -14,7 +14,7 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { LineChart } from "react-native-chart-kit";
 import { Provider as PaperProvider, Button } from "react-native-paper";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Alert } from "react-native";
 
 type Entry = { id: string; value: number; date: string };
